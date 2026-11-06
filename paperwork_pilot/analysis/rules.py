@@ -217,7 +217,11 @@ def analyze_rules(text: str) -> dict:
             if not DEADLINE_WORDS.search(sent):
                 continue
             seen_dates.add(raw_date.lower())
-            deadlines.append({"date": raw_date, "what": sent[:220], "urgency": _urgency(_parse_date(raw_date))})
+            what = sent
+            if len(sent) > 160:
+                line = next((ln.strip() for ln in sent.split("\n") if raw_date in ln), sent)
+                what = line if len(line) >= 20 else sent
+            deadlines.append({"date": raw_date, "what": what[:220], "urgency": _urgency(_parse_date(raw_date))})
     # soonest first when we can parse
     deadlines.sort(key=lambda d: (_parse_date(d["date"]) or datetime.max))
 
@@ -332,6 +336,9 @@ def analyze_rules(text: str) -> dict:
 def merge_safety_net(ai: dict, rules: dict) -> dict:
     """Add rules-found dates/amounts/watch-outs that the AI missed."""
     out = dict(ai)
+    if out.get("document_type") == "other" and rules.get("document_type") != "other":
+        out["document_type"] = rules["document_type"]
+        out["document_type_label"] = rules["document_type_label"]
 
     def _has(items, key, value):
         v = value.lower()
