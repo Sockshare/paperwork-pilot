@@ -23,6 +23,7 @@ import httpx
 from ..config import Settings
 
 REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
+LOCAL_TIMEOUT = httpx.Timeout(connect=5.0, read=900.0, write=30.0, pool=5.0)  # local CPU models can be slow
 
 
 class ProviderError(Exception):
@@ -77,10 +78,19 @@ class OllamaProvider(BaseProvider):
         return True, f"Ollama is ready with {self.model}"
 
     def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        try:
+            return self._complete(system_prompt, user_prompt, want_json, temperature=0.1)
+        except ProviderError as exc:
+            if "repeat" in str(exc).lower():
+                # Small models sometimes loop; one retry with more randomness usually clears it.
+                return self._complete(system_prompt, user_prompt, want_json, temperature=0.5)
+            raise
+
+    def _complete(self, system_prompt: str, user_prompt: str, want_json: bool, temperature: float) -> str:
         payload = {
             "model": self.model,
             "stream": False,
-            "options": {"temperature": 0.1, "num_ctx": 8192},
+            "options": {"temperature": temperature, "num_ctx": 8192, "repeat_penalty": 1.15, "num_predict": 3000},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -89,7 +99,7 @@ class OllamaProvider(BaseProvider):
         if want_json:
             payload["format"] = "json"
         try:
-            r = httpx.post(f"{self._host()}/api/chat", json=payload, timeout=REQUEST_TIMEOUT)
+            r = httpx.post(f"{self._host()}/api/chat", json=payload, timeout=LOCAL_TIMEOUT)
         except httpx.TimeoutException as exc:
             raise ProviderError("Ollama took too long to answer. Try a smaller model or a shorter document.") from exc
         except Exception as exc:  # noqa: BLE001 - connect errors, Ollama dying mid-request, bad URL
@@ -97,6 +107,8 @@ class OllamaProvider(BaseProvider):
         if r.status_code == 404:
             raise ProviderError(f"Model '{self.model}' is not downloaded. Run: ollama pull {self.model}")
         if r.status_code >= 400:
+            if "repeat" in r.text.lower():
+                raise ProviderError("The AI got stuck repeating itself (this happens with small models). Try again, or try a bigger model.")
             raise ProviderError(f"Ollama returned an error ({r.status_code}): {r.text[:200]}")
         try:
             return r.json()["message"]["content"]
