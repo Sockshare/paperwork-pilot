@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paperwork Pilot — understand any document</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="#" id="brandLink">
+    <span class="brand-icon">🧭</span>
+    <span>Paperwork Pilot</span>
+  </a>
+  <div class="topbar-right">
+    <button class="pill" id="enginePill" title="Which AI is being used">
+      <span class="dot" id="engineDot"></span>
+      <span id="engineText">Checking…</span>
+    </button>
+    <button class="icon-btn" id="historyBtn" title="Documents you looked at before">🕘 <span class="hide-sm">History</span></button>
+    <button class="icon-btn" id="helpBtn" title="How to use this">❔ <span class="hide-sm">Help</span></button>
+    <button class="icon-btn" id="settingsBtn" title="Settings">⚙️ <span class="hide-sm">Settings</span></button>
+  </div>
+</header>
+
+<main id="app">
+
+  <!-- ============ FIRST RUN ============ -->
+  <section class="screen" id="screen-setup" hidden>
+    <div class="setup-card">
+      <h1>Welcome! 👋</h1>
+      <p class="lead">Paperwork Pilot explains confusing documents — leases, bills, letters, offers — in plain words. With the first or third option below, everything stays on <strong>your</strong> computer.</p>
+      <h2>One quick question: how should the AI run?</h2>
+      <div class="choice-grid">
+        <button class="choice" data-choice="ollama" id="choiceOllama">
+          <div class="choice-emoji">💻</div>
+          <div class="choice-title">On my computer</div>
+          <div class="choice-desc">Free and private. Uses a program called <b>Ollama</b>.</div>
+          <div class="choice-status" id="ollamaStatus">Looking for Ollama…</div>
+        </button>
+        <button class="choice" data-choice="cloud">
+          <div class="choice-emoji">☁️</div>
+          <div class="choice-title">Use a cloud AI key</div>
+          <div class="choice-desc">Smarter answers. Needs an OpenAI or Gemini key. Your document is sent to that company.</div>
+          <div class="choice-status muted">You'll paste the key next</div>
+        </button>
+        <button class="choice" data-choice="offline">
+          <div class="choice-emoji">🔒</div>
+          <div class="choice-title">No AI (basic mode)</div>
+          <div class="choice-desc">Finds dates, money and common gotchas using simple rules. Works instantly.</div>
+          <div class="choice-status ok">Always works</div>
+        </button>
+      </div>
+      <p class="muted small">You can change this any time in ⚙️ Settings.</p>
+    </div>
+  </section>
+
+  <!-- ============ HOME ============ -->
+  <section class="screen" id="screen-home" hidden>
+    <div class="hero">
+      <h1>What document is confusing you?</h1>
+      <p class="lead">Drop it in. You'll get a plain-language explanation, the dates and money that matter, and the things to watch out for.</p>
+    </div>
+
+    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload a document">
+      <div class="drop-icon">📄</div>
+      <div class="drop-title">Drag a file here, or <span class="link">click to choose one</span></div>
+      <div class="drop-sub">PDF, Word, text, or a photo of the paper (.jpg / .png)</div>
+      <input type="file" id="fileInput" hidden accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp">
+    </div>
+
+    <div class="or-row"><span>or</span></div>
+
+    <div class="paste-box">
+      <label for="pasteText" class="paste-label">Paste the words from the document here</label>
+      <textarea id="pasteText" rows="6" placeholder="Copy the text from an email or website and paste it here…"></textarea>
+      <div class="paste-actions">
+        <span class="muted small" id="pasteCount"></span>
+        <button class="btn primary big" id="pasteBtn">Explain this text →</button>
+      </div>
+    </div>
+
+    <div class="samples">
+      <h3>Just want to see how it works? Try an example:</h3>
+      <div class="sample-row" id="sampleRow"></div>
+    </div>
+
+    <div class="recent" id="recentBox" hidden>
+      <h3>Documents you looked at before</h3>
+      <div id="recentList"></div>
+    </div>
+
+    <p class="privacy-note">🔒 <b>Privacy:</b> <span id="privacyText">Your documents never leave this computer.</span></p>
+  </section>
+
+  <!-- ============ WORKING ============ -->
+  <section class="screen" id="screen-working" hidden>
+    <div class="working-card">
+      <div class="spinner"></div>
+      <h2 id="workingTitle">Reading your document…</h2>
+      <p class="muted" id="workingSub">This usually takes 10–60 seconds on a normal computer.</p>
+      <ul class="steps" id="workingSteps">
+        <li class="done">Getting the text out of the file</li>
+        <li class="active">Understanding what it says</li>
+        <li>Finding dates, money and gotchas</li>
+        <li>Writing it in plain words</li>
+      </ul>
+      <button class="btn ghost" id="cancelWorking">Cancel</button>
+    </div>
+  </section>
+
+  <!-- ============ RESULTS ============ -->
+  <section class="screen" id="screen-results" hidden>
+    <div class="results-head">
+      <button class="btn ghost" id="backBtn">← Start over</button>
+      <div class="results-title">
+        <span class="doc-type" id="rDocType">Document</span>
+        <h1 id="rTitle">Your document</h1>
+        <div class="muted small" id="rMeta"></div>
+      </div>
+      <div class="results-actions">
+        <button class="btn" id="printBtn">🖨️ Print / Save PDF</button>
+      </div>
+    </div>
+
+    <div class="ai-banner" id="aiBanner" hidden></div>
+    <div class="notes" id="rNotes" hidden></div>
+
+    <div class="results-grid">
+      <div class="results-main">
+
+        <div class="card summary-card">
+          <h2>📝 The short version</h2>
+          <p id="rSummary" class="summary-text"></p>
+          <div class="kv" id="rSenderWant"></div>
+        </div>
+
+        <div class="card" id="cardWatch">
+          <h2>⚠️ Watch out for</h2>
+          <div id="rWatch"></div>
+        </div>
+
+        <div class="two-col">
+          <div class="card" id="cardDeadlines">
+            <h2>📅 Dates to remember</h2>
+            <div id="rDeadlines"></div>
+          </div>
+          <div class="card" id="cardMoney">
+            <h2>💵 Money</h2>
+            <div id="rMoney"></div>
+          </div>
+        </div>
+
+        <div class="card" id="cardFacts">
+          <h2>📌 Key facts</h2>
+          <div class="facts" id="rFacts"></div>
+        </div>
+
+        <div class="two-col">
+          <div class="card" id="cardOptions">
+            <h2>✅ What you can do</h2>
+            <ul id="rOptions"></ul>
+          </div>
+          <div class="card" id="cardQuestions">
+            <h2>❓ Good questions to ask</h2>
+            <ul id="rQuestions"></ul>
+          </div>
+        </div>
+
+        <div class="card" id="cardSteps">
+          <h2>👣 Your next steps</h2>
+          <ol id="rSteps"></ol>
+        </div>
+
+        <div class="card" id="cardGlossary">
+          <h2>📖 Hard words, explained</h2>
+          <div class="glossary" id="rGlossary"></div>
+        </div>
+
+        <details class="card raw">
+          <summary>Show the original text</summary>
+          <pre id="rRaw"></pre>
+        </details>
+      </div>
+
+      <aside class="results-side">
+        <div class="card side-card">
+          <h2>What do you want to do next?</h2>
+          <button class="btn primary big full" id="replyBtn">✍️ Write a reply</button>
+          <button class="btn big full" id="askToggle">💬 Ask a question about it</button>
+          <div class="ask-box" id="askBox" hidden>
+            <textarea id="askInput" rows="3" placeholder="For example: Can I get my deposit back if I leave early?"></textarea>
+            <button class="btn primary full" id="askBtn">Ask</button>
+            <div id="askThread"></div>
+          </div>
+          <button class="btn full" id="copySummaryBtn">📋 Copy the summary</button>
+        </div>
+        <div class="card side-card tip">
+          <b>Remember:</b> this is a helper, not a lawyer or doctor. For big decisions, check with a professional or a free legal aid office.
+        </div>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<!-- ============ MODALS ============ -->
+<div class="modal-back" id="modalBack" hidden></div>
+
+<div class="modal" id="modal-reply" hidden>
+  <div class="modal-head"><h2>✍️ Write a reply</h2><button class="x" data-close>✕</button></div>
+  <div class="modal-body">
+    <div class="form-row">
+      <label>What do you want to happen?</label>
+      <select id="replyGoal"></select>
+    </div>
+    <div class="form-row two">
+      <div>
+        <label>Tone</label>
+        <select id="replyTone"></select>
+      </div>
+      <div>
+        <label>Format</label>
+        <select id="replyKind">
+          <option value="email">Email</option>
+          <option value="letter">Printed letter</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Anything else they should know? <span class="muted">(optional)</span></label>
+      <textarea id="replyDetails" rows="3" placeholder="For example: I already paid $200 on October 3. I was in the hospital that week."></textarea>
+    </div>
+    <button class="btn primary big full" id="replyGo">Write it for me</button>
+    <div class="reply-out" id="replyOut" hidden>
+      <div class="muted small" id="replyNote"></div>
+      <textarea id="replyText" rows="16"></textarea>
+      <div class="row-gap">
+        <button class="btn" id="replyCopy">📋 Copy</button>
+        <button class="btn" id="replyDownload">⬇️ Download</button>
+        <button class="btn ghost" id="replyAgain">Try again</button>
+      </div>
+      <p class="muted small">Read it over and fill in anything in [brackets] before you send it.</p>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-settings" hidden>
+  <div class="modal-head"><h2>⚙️ Settings</h2><button class="x" data-close>✕</button></div>
+  <div class="modal-body">
+    <h3>Which AI should do the thinking?</h3>
+    <div class="radio-list">
+      <label class="radio"><input type="radio" name="prov" value="ollama"><div><b>💻 On my computer (Ollama)</b><div class="muted small">Free, private. <span id="setOllamaInfo"></span></div></div></label>
+      <label class="radio"><input type="radio" name="prov" value="openai"><div><b>☁️ OpenAI (or compatible)</b><div class="muted small">Needs an API key. Works with OpenAI, Groq, LM Studio, and others.</div></div></label>
+      <label class="radio"><input type="radio" name="prov" value="gemini"><div><b>☁️ Google Gemini</b><div class="muted small">Needs a free Gemini API key.</div></div></label>
+      <label class="radio"><input type="radio" name="prov" value="offline"><div><b>🔒 No AI (basic mode)</b><div class="muted small">Simple rules only. Instant, always works.</div></div></label>
+    </div>
+
+    <div class="prov-panel" data-prov="ollama">
+      <div class="form-row"><label>Model</label><select id="setOllamaModel"></select></div>
+      <div class="form-row"><label>Ollama address <span class="muted">(leave as is unless you know why)</span></label><input id="setOllamaHost" placeholder="http://127.0.0.1:11434"></div>
+      <div class="help-box" id="ollamaHelp" hidden>
+        <b>Don't have Ollama yet?</b> It's free. In a terminal run:
+        <pre>curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.2:3b</pre>
+        Then click <b>Test</b> below.
+      </div>
+    </div>
+    <div class="prov-panel" data-prov="openai">
+      <div class="form-row"><label>API key</label><input id="setOpenaiKey" type="password" placeholder="sk-…" autocomplete="off"><button class="btn small ghost" data-clear-key="openai_api_key" type="button">Remove saved key</button></div>
+      <div class="form-row"><label>Model</label><input id="setOpenaiModel" placeholder="gpt-4o-mini"></div>
+      <div class="form-row"><label>Server address <span class="muted">(change only for Groq / LM Studio etc.)</span></label><input id="setOpenaiUrl" placeholder="https://api.openai.com/v1"></div>
+      <p class="muted small">Get a key at platform.openai.com → API keys. It starts with "sk-".</p>
+    </div>
+    <div class="prov-panel" data-prov="gemini">
+      <div class="form-row"><label>Gemini API key</label><input id="setGeminiKey" type="password" placeholder="AIza…" autocomplete="off"><button class="btn small ghost" data-clear-key="gemini_api_key" type="button">Remove saved key</button></div>
+      <div class="form-row"><label>Model</label><input id="setGeminiModel" placeholder="gemini-2.0-flash"></div>
+      <p class="muted small">Get a free key at aistudio.google.com → "Get API key".</p>
+    </div>
+
+    <div class="row-gap">
+      <button class="btn" id="setTest">🔌 Test</button>
+      <span id="setTestOut" class="small"></span>
+    </div>
+
+    <h3>Privacy</h3>
+    <label class="check"><input type="checkbox" id="setSaveHistory"> Remember documents I analyze (saved only on this computer)</label>
+    <button class="btn danger-ghost small" id="setClearHistory">🗑️ Delete all saved documents</button>
+
+    <div class="modal-foot">
+      <button class="btn primary big" id="setSave">Save settings</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="modal-history" hidden>
+  <div class="modal-head"><h2>🕘 History</h2><button class="x" data-close>✕</button></div>
+  <div class="modal-body"><div id="historyList"></div></div>
+</div>
+
+<div class="modal" id="modal-help" hidden>
+  <div class="modal-head"><h2>❔ How to use Paperwork Pilot</h2><button class="x" data-close>✕</button></div>
+  <div class="modal-body help">
+    <ol>
+      <li><b>Add a document.</b> Drag a file in, click to choose one, or paste the text. Photos of paper work too (needs a clear photo).</li>
+      <li><b>Wait a moment.</b> The app reads it and explains it in plain words.</li>
+      <li><b>Read the cards.</b> Start with <b>Watch out for</b>, then <b>Dates</b> and <b>Money</b>.</li>
+      <li><b>Take action.</b> Click <b>Write a reply</b> to get a ready-to-send letter, or <b>Ask a question</b>.</li>
+    </ol>
+    <h3>Is it private?</h3>
+    <p>Yes, when the AI runs "On my computer" or in "No AI" mode, nothing is sent anywhere. If you choose a cloud key, your document text is sent to that AI company.</p>
+    <h3>Something not working?</h3>
+    <p>In a terminal, run <code>python scripts/selfcheck.py</code> — it checks your setup and tells you what to fix. The file <code>docs/TROUBLESHOOTING.md</code> in the app folder lists every error message with its fix.</p>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

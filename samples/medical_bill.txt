@@ -1,0 +1,43 @@
+RIVERBEND REGIONAL MEDICAL CENTER
+Patient Financial Services
+PO Box 88120, Columbus, OH 43218
+Billing questions: (614) 555-0199
+
+STATEMENT DATE: October 28, 2026
+ACCOUNT NUMBER: 4471-220938
+PATIENT: Samuel Okafor
+GUARANTOR: Samuel Okafor
+DATE OF SERVICE: September 12, 2026
+PROVIDER: Riverbend Emergency Department
+
+PAYMENT DUE DATE: November 27, 2026
+AMOUNT YOU OWE: $1,862.40
+
+SUMMARY OF CHARGES
+Emergency Department Visit, Level 4 (CPT 99284)        $1,420.00
+CT Scan, Abdomen/Pelvis with contrast (CPT 74177)       $2,310.00
+IV Infusion, first hour (CPT 96365)                       $385.00
+Lab - Comprehensive Metabolic Panel (CPT 80053)           $212.00
+Lab - CBC with differential (CPT 85025)                   $148.00
+Pharmacy - Ondansetron 4mg IV                              $96.50
+Supplies                                                   $71.25
+TOTAL CHARGES                                           $4,642.75
+
+INSURANCE ADJUSTMENTS
+Contracted rate adjustment (BlueRiver Health PPO)      -$1,980.35
+Insurance paid                                           -$800.00
+PATIENT RESPONSIBILITY                                   $1,862.40
+
+Your insurance applied $1,500.00 to your annual deductible and $362.40 to your 20% coinsurance.
+
+IMPORTANT NOTICES
+- If payment in full is not received by the due date, this account may be referred to a collection agency and reported to credit bureaus.
+- Payment plans are available with no interest for balances paid within 12 months. Call us or visit riverbendmed.example/pay to set one up.
+- You may qualify for financial assistance. Households earning up to 300% of the federal poverty level may receive a reduced bill or a full write-off. Request an application by calling (614) 555-0199 or online.
+- You have the right to request an itemized statement at no charge.
+- This statement reflects charges after your insurance has processed the claim. If you believe your insurance should have paid more, contact BlueRiver Health PPO at the number on your insurance card and ask about an appeal. Claim #BR-2026-558812.
+- Under the No Surprises Act, if you received emergency care from an out-of-network provider, you may be protected from balance billing. Contact us if you believe this applies.
+
+To pay: online at riverbendmed.example/pay, by phone, or by mailing a check to the address above with your account number.
+
+Thank you for choosing Riverbend Regional Medical Center.

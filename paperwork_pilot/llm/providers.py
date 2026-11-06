@@ -1,0 +1,328 @@
+"""AI engine providers.
+
+Every provider exposes the same tiny interface so the rest of the app never
+cares where the answer came from:
+
+    provider.complete(system_prompt, user_prompt, want_json=False) -> str
+    provider.check() -> (ok: bool, message: str)
+
+Providers:
+    OllamaProvider   - runs on the user's own computer (private, free)
+    OpenAIProvider   - any OpenAI-compatible API (OpenAI, Groq, LM Studio, ...)
+    GeminiProvider   - Google Gemini REST API
+    OfflineProvider  - no AI at all; the rules engine in analysis/rules.py is used
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import httpx
+
+from ..config import Settings
+
+REQUEST_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=30.0, pool=5.0)
+
+
+class ProviderError(Exception):
+    """Raised when an AI provider cannot answer. The message is user-friendly."""
+
+
+class BaseProvider:
+    name = "base"
+    local = False
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.model = settings.effective_model()
+
+    def check(self) -> tuple[bool, str]:
+        raise NotImplementedError
+
+    def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        raise NotImplementedError
+
+
+# ---------------------------------------------------------------------------
+# Ollama (local)
+# ---------------------------------------------------------------------------
+class OllamaProvider(BaseProvider):
+    name = "ollama"
+    local = True
+
+    def _host(self) -> str:
+        return normalize_host(self.settings.ollama_host)
+
+    def list_models(self) -> list[str]:
+        try:
+            r = httpx.get(f"{self._host()}/api/tags", timeout=3.0)
+            r.raise_for_status()
+            return [m["name"] for m in r.json().get("models", [])]
+        except Exception:  # noqa: BLE001 - includes InvalidURL, HTTPError, bad JSON
+            return []
+
+    def check(self) -> tuple[bool, str]:
+        probe = detect_ollama(self.settings.ollama_host)
+        if probe.get("error"):
+            return False, probe["error"]
+        if not probe["running"]:
+            return False, "Ollama isn't running (or isn't installed). See Settings for the install steps, or start it with: ollama serve"
+        models = probe["models"]
+        if not models:
+            return False, f"Ollama is running but has no models. Run: ollama pull {self.model}"
+        base = self.model.split(":")[0]
+        if not any(m == self.model or m.split(":")[0] == base for m in models):
+            return False, f"Model '{self.model}' is not downloaded. Run: ollama pull {self.model}"
+        return True, f"Ollama is ready with {self.model}"
+
+    def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        payload = {
+            "model": self.model,
+            "stream": False,
+            "options": {"temperature": 0.1, "num_ctx": 8192},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if want_json:
+            payload["format"] = "json"
+        try:
+            r = httpx.post(f"{self._host()}/api/chat", json=payload, timeout=REQUEST_TIMEOUT)
+        except httpx.TimeoutException as exc:
+            raise ProviderError("Ollama took too long to answer. Try a smaller model or a shorter document.") from exc
+        except Exception as exc:  # noqa: BLE001 - connect errors, Ollama dying mid-request, bad URL
+            raise ProviderError("Could not reach Ollama. Is it running? Try: ollama serve") from exc
+        if r.status_code == 404:
+            raise ProviderError(f"Model '{self.model}' is not downloaded. Run: ollama pull {self.model}")
+        if r.status_code >= 400:
+            raise ProviderError(f"Ollama returned an error ({r.status_code}): {r.text[:200]}")
+        try:
+            return r.json()["message"]["content"]
+        except (ValueError, KeyError) as exc:
+            raise ProviderError("Ollama sent back an answer the app could not read.") from exc
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible (OpenAI, Groq, Together, LM Studio, llama.cpp server ...)
+# ---------------------------------------------------------------------------
+class OpenAIProvider(BaseProvider):
+    name = "openai"
+    local = False
+
+    def __init__(self, settings: Settings):
+        super().__init__(settings)
+        # Local OpenAI-compatible servers keep data on-device.
+        self.local = any(h in settings.openai_base_url for h in ("127.0.0.1", "localhost"))
+
+    def _headers(self) -> dict:
+        return {"Authorization": f"Bearer {self.settings.openai_api_key or 'none'}", "Content-Type": "application/json"}
+
+    def check(self) -> tuple[bool, str]:
+        if not self.settings.openai_api_key and not self.local:
+            return False, "No API key saved. Paste your key in Settings."
+        try:
+            r = httpx.get(f"{self.settings.openai_base_url.rstrip('/')}/models", headers=self._headers(), timeout=8.0)
+        except Exception:  # noqa: BLE001
+            return False, "Could not reach the API server. Check the URL and your internet connection."
+        if r.status_code == 401:
+            return False, "The API key was rejected. Double-check it in Settings."
+        if r.status_code >= 400:
+            return False, f"The API server returned an error ({r.status_code})."
+        return True, f"Connected. Using {self.model}"
+
+    def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        payload = {
+            "model": self.model,
+            "temperature": 0.1,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if want_json:
+            payload["response_format"] = {"type": "json_object"}
+        try:
+            r = httpx.post(
+                f"{self.settings.openai_base_url.rstrip('/')}/chat/completions",
+                headers=self._headers(),
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except httpx.TimeoutException as exc:
+            raise ProviderError("The API server took too long to answer. Try again in a moment.") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderError("Could not reach the API server. Check the address and your internet connection.") from exc
+        if r.status_code == 401:
+            raise ProviderError("The API key was rejected. Double-check it in Settings.")
+        if r.status_code == 429:
+            raise ProviderError("The API says you are out of credits or sending too fast. Wait a minute and try again.")
+        if r.status_code >= 400:
+            # Some servers reject response_format; retry once without it.
+            if want_json and "response_format" in payload:
+                payload.pop("response_format")
+                try:
+                    r = httpx.post(
+                        f"{self.settings.openai_base_url.rstrip('/')}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                        timeout=REQUEST_TIMEOUT,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    raise ProviderError("Could not reach the API server. Check the address and your internet connection.") from exc
+            if r.status_code >= 400:
+                raise ProviderError(f"The API returned an error ({r.status_code}): {r.text[:200]}")
+        try:
+            return r.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError) as exc:
+            raise ProviderError("The API sent back an answer the app could not read.") from exc
+
+
+# ---------------------------------------------------------------------------
+# Google Gemini
+# ---------------------------------------------------------------------------
+class GeminiProvider(BaseProvider):
+    name = "gemini"
+    local = False
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    def _headers(self) -> dict:
+        # Key goes in a header, never in the URL, so it can't end up in request logs.
+        return {"x-goog-api-key": self.settings.gemini_api_key, "Content-Type": "application/json"}
+
+    def check(self) -> tuple[bool, str]:
+        if not self.settings.gemini_api_key:
+            return False, "No Gemini API key saved. Paste your key in Settings."
+        try:
+            r = httpx.get(f"{self.BASE}/models", headers=self._headers(), timeout=8.0)
+        except Exception:  # noqa: BLE001
+            return False, "Could not reach Google. Check your internet connection."
+        if r.status_code in (400, 401, 403):
+            return False, "The Gemini API key was rejected. Double-check it in Settings."
+        if r.status_code >= 400:
+            return False, f"Gemini returned an error ({r.status_code})."
+        return True, f"Connected. Using {self.model}"
+
+    def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        if want_json:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+        try:
+            r = httpx.post(
+                f"{self.BASE}/models/{self.model}:generateContent",
+                headers=self._headers(),
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except httpx.TimeoutException as exc:
+            raise ProviderError("Google took too long to answer. Try again in a moment.") from exc
+        except Exception as exc:  # noqa: BLE001 - any transport/URL problem
+            raise ProviderError("Could not reach Google. Check your internet connection.") from exc
+        if r.status_code in (400, 401, 403):
+            raise ProviderError("The Gemini API key was rejected. Double-check it in Settings.")
+        if r.status_code == 429:
+            raise ProviderError("Gemini says you are sending too fast or out of quota. Wait a minute and try again.")
+        if r.status_code >= 400:
+            raise ProviderError(f"Gemini returned an error ({r.status_code}): {r.text[:200]}")
+        try:
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except (ValueError, KeyError, IndexError) as exc:
+            raise ProviderError("Gemini sent back an answer the app could not read.") from exc
+
+
+# ---------------------------------------------------------------------------
+# Offline (no AI)
+# ---------------------------------------------------------------------------
+class OfflineProvider(BaseProvider):
+    name = "offline"
+    local = True
+
+    def check(self) -> tuple[bool, str]:
+        return True, "No AI (basic mode): simple rules only. Nothing leaves this computer."
+
+    def complete(self, system_prompt: str, user_prompt: str, want_json: bool = False) -> str:
+        raise ProviderError("Basic mode has no AI model.")
+
+
+PROVIDERS = {
+    "ollama": OllamaProvider,
+    "openai": OpenAIProvider,
+    "gemini": GeminiProvider,
+    "offline": OfflineProvider,
+}
+
+
+def get_provider(settings: Settings) -> BaseProvider:
+    cls = PROVIDERS.get(settings.provider, OfflineProvider)
+    return cls(settings)
+
+
+def normalize_host(host: str) -> str:
+    """'127.0.0.1:11434' -> 'http://127.0.0.1:11434'. Raises ValueError with a friendly message if unusable."""
+    host = (host or "").strip().rstrip("/")
+    if not host:
+        return "http://127.0.0.1:11434"
+    if not host.startswith(("http://", "https://")):
+        host = "http://" + host
+    try:
+        url = httpx.URL(host)
+        if not url.host:
+            raise ValueError
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"'{host}' is not a valid address. It should look like http://127.0.0.1:11434") from exc
+    return host
+
+
+def detect_ollama(host: str = "http://127.0.0.1:11434") -> dict:
+    """One quick probe. Used by the first-run screen, Settings, and the Ollama provider."""
+    try:
+        base = normalize_host(host)
+    except ValueError as exc:
+        return {"running": False, "models": [], "error": str(exc)}
+    try:
+        r = httpx.get(f"{base}/api/tags", timeout=2.0)
+        r.raise_for_status()
+        models = [m["name"] for m in r.json().get("models", [])]
+        return {"running": True, "models": models}
+    except Exception:  # noqa: BLE001
+        return {"running": False, "models": []}
+
+
+# ---------------------------------------------------------------------------
+# JSON repair: small local models sometimes wrap JSON in prose or code fences.
+# ---------------------------------------------------------------------------
+def extract_json(text: str) -> dict | None:
+    if not text:
+        return None
+    text = text.strip()
+    # strip ```json fences
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    try:
+        obj = json.loads(text)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    # find the outermost {...}
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    candidate = text[start : end + 1]
+    try:
+        obj = json.loads(candidate)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        pass
+    # last resort: remove trailing commas
+    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+    try:
+        obj = json.loads(candidate)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        return None
